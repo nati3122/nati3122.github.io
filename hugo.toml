@@ -1,0 +1,26 @@
+baseURL = 'https://nati3122.github.io/'
+languageCode = 'zh-tw'
+title = 'Blog for Nati'
+theme = 'PaperMod'
+
+# 核心：定義作者資訊（這是解決報錯的關鍵）
+[author]
+    name = "Nati (nati3122)"
+
+[params]
+    # 外觀設定
+    defaultTheme = "auto"
+    showCodeCopyButtons = true
+    
+    # PaperMod 首頁設定
+    [params.homeInfoParams]
+        Title = "你好 👋"
+        Content = "探索技術與硬體的邊界。這裡記錄了我的 AI 實驗、硬體改裝與自動化開發心得。"
+
+    # 社交連結 (選填)
+    [[params.socialIcons]]
+        name = "github"
+        url = "https://github.com/nati3122"
+    [[params.socialIcons]]
+        name = "youtube"
+        url = "https://youtube.com/@RickAstleyYT"
