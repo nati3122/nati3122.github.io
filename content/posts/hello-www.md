@@ -5,7 +5,7 @@ tags: ["Blog", "Hugo"]
 draft: false
 ---
 
-## 你好，世界！
+## Hello，World Wide Web！
 這是我使用 Hugo 與 GitHub Pages 搭建的個人空間。
 未來這裡會紀錄：
 - **AI 部署**：本地 LLM 的訓練與優化。
