@@ -1,7 +1,7 @@
 ---
 title: "從零開始：我的博客啟動"
 date: 2026-03-08
-tags: ["Blog", "Hugo"]
+tags: ["Blog"]
 draft: false
 ---
 
