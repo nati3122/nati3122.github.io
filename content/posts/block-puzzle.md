@@ -12,8 +12,6 @@ draft: false
 遊戲進度重整後自動恢復
 支援 PWA，可加到手機主畫面離線遊玩
 
-原始碼
-github.com/nati3122/block-puzzle
 
 {{< rawhtml >}}
 <iframe
