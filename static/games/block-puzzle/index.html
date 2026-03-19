@@ -162,11 +162,15 @@
     .pc { border-radius: 3px; }
 
     /* ── Ghost ── */
-    #ghost { position: fixed; pointer-events: none; z-index: 1000; display: none; transform: translate(-50%,-50%); opacity: 0.78; }
+    #ghost {
+      position: fixed; pointer-events: none; z-index: 1000; display: none;
+      transform: translate(-50%,-50%); opacity: 0;
+      will-change: transform, left, top;  /* GPU layer hint */
+    }
     @media (pointer:coarse) {
-      #ghost { opacity: 0; } /* opacity controlled by JS on touch */
       .cell { touch-action: none; }
       .board-wrap { touch-action: none; }
+      .pieces-area { touch-action: none; }
     }
 
     /* ── Buttons ── */
@@ -481,8 +485,9 @@ function renderPieces(){
     } else {
       slot.className='piece-slot'+(selIdx===i?' selected':'');
       slot.appendChild(makePieceGrid(p,18));
+      // 桌面：click 選取；觸控：touchstart 即時拖動
       slot.addEventListener('click', e=>{ e.stopPropagation(); onPieceClick(i); });
-      slot.addEventListener('touchstart', e=>{ e.stopPropagation(); onPieceTouchStart(e,i); },{passive:false});
+      slot.addEventListener('touchstart', e=>{ onPieceTouchStart(e,i); },{passive:false});
     }
     area.appendChild(slot);
   });
@@ -550,61 +555,52 @@ function triggerLevelUpFlash(){
 
 /* ══════════════════════════════════════
    INTERACTION
-   桌面：點擊選取 → 滑鼠移動預覽 → 點擊放置
-   移動端：長按/拖動方塊 → 手指移動即時預覽 → 放開放置
-          (手指偏移補正：ghost 顯示在手指上方，避免遮擋)
+   桌面：點擊選取 → hover 預覽 → 點擊放置
+   移動端：touchstart 立即抓取 → rAF 節流移動 → touchend 放置
 ══════════════════════════════════════ */
-
-// ── 共用：取消選取 ──
-function deselect(){
-  selIdx=null; clearPreview(); hideGhost(); renderPieces();
-  document.querySelectorAll('#board .cell').forEach(el=>el.classList.remove('can-select'));
-  setHint(isTouchDevice()?'長按方塊開始拖動':'點擊下方方塊來選取', false);
-}
 
 const isTouchDevice = () => window.matchMedia('(pointer:coarse)').matches;
 
-// ── 桌面：點擊選取 ──
+/* ── 共用工具 ── */
+function deselect(){
+  selIdx=null; clearPreview(); hideGhost(); renderPieces();
+  document.querySelectorAll('#board .cell').forEach(el=>el.classList.remove('can-select'));
+  setHint(isTouchDevice()?'拖動方塊到格子上放置':'點擊下方方塊來選取', false);
+}
+
+/* ══ 桌面互動 ══ */
 function onPieceClick(i){
-  if(isTouchDevice()) return; // 觸控裝置走 touch 路徑
+  if(isTouchDevice()) return;
   if(selIdx===i){ deselect(); return; }
   selIdx=i; clearPreview(); renderPieces(); updateGhost(pieces[i]);
   document.querySelectorAll('#board .cell').forEach(el=>el.classList.add('can-select'));
-  setHint('移到格子上預覽，點擊格子放置　ESC 取消', true);
+  setHint('移到格子上預覽，點擊放置　ESC 取消', true);
 }
-
-// ── 桌面：board hover & click ──
 function onBoardMouseOver(e){
   if(selIdx===null||isTouchDevice()) return;
-  const el=e.target.closest?e.target.closest('.cell'):null;
-  if(!el) return;
-  showPreview(pieces[selIdx],+el.dataset.r,+el.dataset.c);
+  const el=e.target.closest&&e.target.closest('.cell');
+  if(el) showPreview(pieces[selIdx],+el.dataset.r,+el.dataset.c);
 }
 function onBoardMouseOut(e){
   if(selIdx===null||isTouchDevice()) return;
-  const rel=e.relatedTarget;
-  if(rel&&rel.closest&&rel.closest('#board')) return;
+  if(e.relatedTarget&&e.relatedTarget.closest&&e.relatedTarget.closest('#board')) return;
   clearPreview();
 }
 function onBoardClick(e){
   if(selIdx===null||isTouchDevice()) return;
-  const el=e.target.closest?e.target.closest('.cell'):null;
+  const el=e.target.closest&&e.target.closest('.cell');
   if(!el) return;
-  const placed=doPlace(selIdx,+el.dataset.r,+el.dataset.c);
-  if(placed){
+  if(doPlace(selIdx,+el.dataset.r,+el.dataset.c)){
     selIdx=null; hideGhost();
     document.querySelectorAll('#board .cell').forEach(c=>c.classList.remove('can-select'));
-    setHint('點擊下方方塊來選取', false);
+    setHint('點擊下方方塊來選取',false);
   }
 }
-
-// Ghost 跟著滑鼠（桌面）
 document.addEventListener('mousemove', e=>{
   if(selIdx===null||isTouchDevice()) return;
   const g=document.getElementById('ghost');
   g.style.left=e.clientX+'px'; g.style.top=e.clientY+'px';
 });
-
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); });
 document.addEventListener('click', e=>{
   if(selIdx===null||isTouchDevice()) return;
@@ -612,159 +608,193 @@ document.addEventListener('click', e=>{
 });
 
 /* ══════════════════════════════════════
-   TOUCH DRAG（移動端）
-   設計原則：
-   1. touchstart on piece-slot → 立即啟動拖動（不需長按）
-   2. ghost 顯示在手指正上方（Y 偏移 = ghost高度 + 16px 間距）
-   3. 手指移動時用 elementFromPoint 偵測格子，即時顯示預覽
-   4. touchend → 放置；若落點無效或在棋盤外 → 取消
-   5. 全程 preventDefault 防止頁面滾動
+   移動端觸控拖動
+   核心優化：
+   1. 無 threshold 延遲，touchstart 立即顯示 ghost
+   2. rAF 節流：每幀最多更新一次，避免主執行緒堆積
+   3. 直接用 boardRect + 數學計算目標格子，完全不碰 DOM 查詢
+   4. ghost 用 CSS transform 移動，觸發 compositor 不造成 reflow
+   5. preview 只在格子改變時才更新 DOM
 ══════════════════════════════════════ */
-let touchDragIdx = null;          // 正在拖動的 piece index
-let touchEndIdx = null;           // touchend 時確認的 index（避免閉包問題）
-let touchDragActive = false;      // 是否已開始移動（區別 tap vs drag）
-let touchStartX = 0, touchStartY = 0;
-const DRAG_THRESHOLD = 6;         // px，超過才視為拖動
+let td = {            // touch drag state
+  idx: null,          // piece index
+  active: false,      // finger is down
+  rafId: null,        // pending rAF id
+  pendX: 0,           // latest touch X
+  pendY: 0,           // latest touch Y
+  lastR: -1,          // last previewed row
+  lastC: -1,          // last previewed col
+  boardRect: null,    // cached board bounding rect
+};
 
-// 計算 ghost 顯示位置（手指上方，讓格子可見）
-function ghostOffsetY(piece){
+// Ghost offset: position piece centre-top above finger
+// so the finger points at the bottom-centre of the piece ghost
+function getGhostOffset(piece){
+  const SZ = 32, GAP = 3;
   const rows = piece.shape.length;
-  const cellSz = 26; // ghost cell size
-  return -(rows * (cellSz + 2)) - 20; // ghost 高度 + 間距
+  const cols = piece.shape[0].length;
+  const h = rows * SZ + (rows-1) * GAP;
+  const w = cols * SZ + (cols-1) * GAP;
+  return { dx: -w/2, dy: -(h + 28) }; // 28px gap above finger
 }
 
-function moveTouchGhost(piece, cx, cy){
+// Build ghost DOM only once per drag start
+function buildGhost(piece){
+  const gi = document.getElementById('ghost-inner');
+  gi.innerHTML = '';
+  const SZ = 32;
+  const pg = document.createElement('div');
+  pg.className = 'piece-grid';
+  pg.style.gridTemplateColumns = `repeat(${piece.shape[0].length},${SZ}px)`;
+  piece.shape.forEach(row=>row.forEach(v=>{
+    const pc=document.createElement('div');
+    pc.className='pc';
+    pc.style.cssText=`width:${SZ}px;height:${SZ}px;background:${v?piece.color:'transparent'}`;
+    pg.appendChild(pc);
+  }));
+  gi.appendChild(pg);
+}
+
+// Move ghost using transform (no layout thrashing)
+function positionGhost(cx, cy, piece){
   const g = document.getElementById('ghost');
-  // X 置中，Y 在手指上方
-  g.style.left = cx + 'px';
-  g.style.top  = (cy + ghostOffsetY(piece)) + 'px';
-  g.style.transform = 'translate(-50%, 0)';
+  const off = getGhostOffset(piece);
+  g.style.left = (cx + off.dx) + 'px';
+  g.style.top  = (cy + off.dy) + 'px';
+  g.style.transform = 'none';           // override the default translate(-50%,-50%)
   g.style.display = 'block';
+  g.style.opacity = '0.88';
 }
 
-// 從觸控座標取得 board cell（排除 ghost 遮擋）
-function cellFromTouch(cx, cy){
-  // 暫時隱藏 ghost 讓 elementFromPoint 穿透
-  const g = document.getElementById('ghost');
-  const prev = g.style.display;
-  g.style.display = 'none';
-  const el = document.elementFromPoint(cx, cy);
-  g.style.display = prev;
-  if(!el) return null;
-  return el.closest ? el.closest('.cell') : null;
+// Calculate grid row/col from finger position using cached boardRect
+// Returns {r,c} or null if outside board
+function rcFromPoint(cx, cy){
+  const rect = td.boardRect;
+  if(!rect) return null;
+  const CELL = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell')) || 44;
+  const GAP  = 3;
+  const x = cx - rect.left - 12;   // 12 = board padding
+  const y = cy - rect.top  - 12;
+  const c = Math.floor(x / (CELL + GAP));
+  const r = Math.floor(y / (CELL + GAP));
+  if(r<0||r>=ROWS||c<0||c>=COLS) return null;
+  return {r,c};
 }
 
-// piece-slot 的 touchstart
+// rAF callback — runs at most once per frame
+function onTouchFrame(){
+  td.rafId = null;
+  if(td.idx === null) return;
+
+  const piece = pieces[td.idx];
+  if(!piece) return;
+
+  // Move ghost
+  positionGhost(td.pendX, td.pendY, piece);
+
+  // Update preview only if the target cell changed
+  const pos = rcFromPoint(td.pendX, td.pendY);
+  if(!pos){
+    if(td.lastR !== -1){ clearPreview(); td.lastR=-1; td.lastC=-1; }
+    return;
+  }
+  if(pos.r !== td.lastR || pos.c !== td.lastC){
+    td.lastR = pos.r; td.lastC = pos.c;
+    showPreview(piece, pos.r, pos.c);
+  }
+}
+
 function onPieceTouchStart(e, i){
   if(!pieces[i]) return;
   e.preventDefault();
-  touchDragIdx = i;
-  touchEndIdx = i;
-  touchDragActive = false;
+  e.stopPropagation();
+
+  // Cancel any stale drag
+  if(td.rafId) cancelAnimationFrame(td.rafId);
+
   const t = e.touches[0];
-  touchStartX = t.clientX;
-  touchStartY = t.clientY;
+  const piece = pieces[i];
 
-  // 立刻更新 ghost 但先不顯示（等移動一點才顯示，避免誤觸）
-  updateGhost(pieces[i]);
-  moveTouchGhost(pieces[i], t.clientX, t.clientY);
-  document.getElementById('ghost').style.opacity = '0'; // 先透明
+  td.idx    = i;
+  td.active = true;
+  td.lastR  = -1;
+  td.lastC  = -1;
+  td.pendX  = t.clientX;
+  td.pendY  = t.clientY;
 
-  // 標記 slot
+  // Cache board rect once per drag (stable until renderBoard)
+  td.boardRect = document.getElementById('board').getBoundingClientRect();
+
+  // Build and show ghost immediately — zero delay
+  buildGhost(piece);
+  positionGhost(t.clientX, t.clientY, piece);
+
+  // Dim source slot
   const slot = document.querySelector(`.piece-slot[data-idx="${i}"]`);
-  if(slot) slot.classList.add('selected');
+  if(slot){ slot.style.opacity='0.35'; slot.style.transform='scale(0.93)'; }
+
+  setHint('放開手指以放置方塊', true);
 }
 
 document.addEventListener('touchmove', e=>{
-  if(touchDragIdx === null) return;
-  e.preventDefault();
+  if(!td.active) return;
+  e.preventDefault();                 // block page scroll
 
   const t = e.touches[0];
-  const dx = t.clientX - touchStartX;
-  const dy = t.clientY - touchStartY;
+  td.pendX = t.clientX;
+  td.pendY = t.clientY;
 
-  if(!touchDragActive && Math.sqrt(dx*dx+dy*dy) > DRAG_THRESHOLD){
-    touchDragActive = true;
-    document.getElementById('ghost').style.opacity = '0.85';
-    // 把所有 cell 標記可放置（視覺提示）
-    document.querySelectorAll('#board .cell').forEach(el=>el.classList.add('can-select'));
-    setHint('放開手指以放置方塊', true);
-  }
-
-  if(!touchDragActive) return;
-
-  const piece = pieces[touchDragIdx];
-  moveTouchGhost(piece, t.clientX, t.clientY);
-
-  // 預覽落點（用手指真實位置，ghost 在上方，下方即目標格子）
-  const cell = cellFromTouch(t.clientX, t.clientY);
-  if(cell){
-    showPreview(piece, +cell.dataset.r, +cell.dataset.c);
-  } else {
-    clearPreview();
-  }
-}, {passive:false});
-
-document.addEventListener('touchend', e=>{
-  if(touchDragIdx === null) return;
-  e.preventDefault();
-
-  const t = e.changedTouches[0];
-  const piece = pieces[touchDragIdx];
-  const wasDrag = touchDragActive;
-
-  // 清理視覺狀態
-  hideGhost();
-  clearPreview();
-  document.getElementById('ghost').style.transform = 'translate(-50%,-50%)'; // 恢復預設
-  document.querySelectorAll('#board .cell').forEach(el=>el.classList.remove('can-select'));
-  document.querySelectorAll('.piece-slot.selected').forEach(el=>el.classList.remove('selected'));
-  touchDragIdx = null;
-  touchDragActive = false;
-
-  if(wasDrag){
-    // 拖動模式：在放開位置放置
-    const cell = cellFromTouch(t.clientX, t.clientY);
-    if(cell) doPlace(touchEndIdx, +cell.dataset.r, +cell.dataset.c);
-    selIdx = null;
-    setHint('長按方塊開始拖動', false);
-  } else {
-    // 輕點：切換選取（tap-to-select，再 tap cell 放置）
-    const slot = document.elementFromPoint(t.clientX, t.clientY);
-    if(slot){
-      const ps = slot.closest ? slot.closest('.piece-slot') : null;
-      if(ps && !ps.classList.contains('empty')){
-        const i = +ps.dataset.idx;
-        if(selIdx === i){
-          selIdx = null;
-          renderPieces();
-          setHint('長按方塊開始拖動', false);
-        } else {
-          selIdx = i;
-          renderPieces();
-          updateGhost(pieces[i]);
-          document.querySelectorAll('#board .cell').forEach(el=>el.classList.add('can-select'));
-          setHint('點擊格子放置　再次點擊方塊取消', true);
-        }
-        return;
-      }
-      // tap on board cell while piece selected
-      if(selIdx !== null){
-        const cell = slot.closest ? slot.closest('.cell') : null;
-        if(cell){
-          const placed = doPlace(selIdx, +cell.dataset.r, +cell.dataset.c);
-          if(placed){
-            selIdx = null; hideGhost();
-            document.querySelectorAll('#board .cell').forEach(c=>c.classList.remove('can-select'));
-            setHint('長按方塊開始拖動', false);
-          }
-        }
-      }
-    }
-  }
+  // Schedule frame update — skip if one already queued
+  if(!td.rafId) td.rafId = requestAnimationFrame(onTouchFrame);
 },{passive:false});
 
-// ghost 的 touchmove 不需要重複，已在 document 層處理
+document.addEventListener('touchend', e=>{
+  if(!td.active) return;
+  e.preventDefault();
+
+  // Flush any pending frame immediately (synchronous)
+  if(td.rafId){ cancelAnimationFrame(td.rafId); td.rafId=null; }
+
+  const t    = e.changedTouches[0];
+  const idx  = td.idx;
+  const piece = pieces[idx];
+
+  // Reset drag state FIRST to avoid re-entry
+  td.active = false;
+  td.idx    = null;
+  td.lastR  = -1;
+  td.lastC  = -1;
+
+  // Restore slot appearance
+  document.querySelectorAll('.piece-slot').forEach(el=>{
+    el.style.opacity=''; el.style.transform='';
+  });
+
+  // Hide ghost & clear preview
+  hideGhost();
+  document.getElementById('ghost').style.transform='translate(-50%,-50%)'; // restore CSS default
+  clearPreview();
+  document.querySelectorAll('#board .cell').forEach(el=>el.classList.remove('can-select'));
+
+  // Attempt placement at finger position
+  if(piece){
+    const pos = rcFromPoint(t.clientX, t.clientY);
+    if(pos) doPlace(idx, pos.r, pos.c);
+  }
+
+  setHint('拖動方塊到格子上放置', false);
+},{passive:false});
+
+// Cancelled touch (e.g. incoming call) — treat same as touchend
+document.addEventListener('touchcancel', e=>{
+  if(!td.active) return;
+  if(td.rafId){ cancelAnimationFrame(td.rafId); td.rafId=null; }
+  td.active=false; td.idx=null; td.lastR=-1; td.lastC=-1;
+  document.querySelectorAll('.piece-slot').forEach(el=>{ el.style.opacity=''; el.style.transform=''; });
+  hideGhost();
+  clearPreview();
+  document.querySelectorAll('#board .cell').forEach(el=>el.classList.remove('can-select'));
+},{passive:false});
 
 /* ══════════════════════════════════════
    GAME LOGIC
@@ -860,14 +890,14 @@ function newGame(){
   selIdx=null;
   document.getElementById('game-over-overlay').classList.remove('show');
   hideGhost(); renderBoard(); renderPieces(); updateStats(); renderObsPips();
-  setHint(isTouchDevice()?'長按方塊開始拖動，或點一下選取':'點擊下方方塊來選取',false);
+  setHint(isTouchDevice()?'拖動方塊到格子上放置':'點擊下方方塊來選取',false);
 }
 
 function resumeOrNew(){
   loadBest();
   if(loadState()){
     renderBoard(); renderPieces(); updateStats(); renderObsPips();
-    setHint(isTouchDevice()?'長按方塊開始拖動，或點一下選取':'點擊下方方塊來選取',false);
+    setHint(isTouchDevice()?'拖動方塊到格子上放置':'點擊下方方塊來選取',false);
   } else {
     newGame();
   }
