@@ -638,7 +638,7 @@ function getGhostOffset(piece){
   return { dx: -w/2, dy: -(h + 28) }; // 28px gap above finger
 }
 
-// Build ghost DOM only once per drag start
+// Build ghost DOM — 拖動時只顯示陰影輪廓，不顯示方塊顏色
 function buildGhost(piece){
   const gi = document.getElementById('ghost-inner');
   gi.innerHTML = '';
@@ -649,7 +649,15 @@ function buildGhost(piece){
   piece.shape.forEach(row=>row.forEach(v=>{
     const pc=document.createElement('div');
     pc.className='pc';
-    pc.style.cssText=`width:${SZ}px;height:${SZ}px;background:${v?piece.color:'transparent'}`;
+    if(v){
+      pc.style.cssText=`width:${SZ}px;height:${SZ}px;`
+        +`background:rgba(255,255,255,0.12);`
+        +`border:2px solid rgba(255,255,255,0.35);`
+        +`box-shadow:0 2px 12px rgba(0,0,0,0.5);`
+        +`border-radius:5px;`;
+    } else {
+      pc.style.cssText=`width:${SZ}px;height:${SZ}px;background:transparent;`;
+    }
     pg.appendChild(pc);
   }));
   gi.appendChild(pg);
