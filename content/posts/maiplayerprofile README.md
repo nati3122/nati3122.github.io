@@ -8,7 +8,7 @@ draft: false
 # Maiplayerprofile：打造專屬 Maimai 玩家名片卡
 
 這是一個基於 Gradio 的小工具，用 Python 組合本地素材，快速生成可下載的 Maimai 玩家卡影像（PNG）。非常適合想要用輕量方式形式化自己的遊戲成績展示，或在社群中分享個人風格帶牌。
-
+https://huggingface.co/spaces/hilomi/maiplayerprofile
 ## 1. 為什麼做這個專案
 
 - Maimai 風格卡片在玩家圈非常受歡迎，但手動尋找模版、組合圖片耗時。
