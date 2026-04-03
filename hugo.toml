@@ -1,23 +1,30 @@
 baseURL = 'https://nati3122.github.io/'
 languageCode = 'zh-tw'
-title = 'Blog for Nati'
+title = 'OmniFlow | Blog for Nati' # 修改標題包含 App 名稱
 theme = 'PaperMod'
 
-# 核心：定義作者資訊（這是解決報錯的關鍵）
 [author]
     name = "Nati (nati3122)"
 
+# 新增選單：讓隱私權政策出現在導覽列
+[[menu.main]]
+    name = "隱私權政策"
+    url = "/privacy.html"
+    weight = 10
+
 [params]
-    # 外觀設定
     defaultTheme = "auto"
     showCodeCopyButtons = true
     
-    # PaperMod 首頁設定
+    # 修改首頁資訊：加入應用程式用途說明
     [params.homeInfoParams]
-        Title = "你好 👋"
-        Content = "探索技術與硬體的邊界。這裡記錄了我的 AI 實驗、硬體改裝與自動化開發心得。"
+        Title = "歡迎來到 OmniFlow 👋" 
+        Content = """
+OmniFlow 是一款整合型個人效率工具，結合了記帳、課表管理、音樂播放與 AI 輔助功能，致力於解決行動裝置軟體碎片化的痛點。
 
-    # 社交連結 (選填)
+在此部落格中，我記錄了關於 OmniFlow 的開發心得、AI 實驗以及硬體改裝的技術分享。
+"""
+
     [[params.socialIcons]]
         name = "github"
         url = "https://github.com/nati3122"
